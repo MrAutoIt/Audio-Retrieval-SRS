@@ -4,6 +4,7 @@ export interface Settings {
   box_intervals: number[]; // Days for each box level
   extra_seconds: number; // Extra seconds added to response window
   onboarding_completed: boolean;
+  current_language: string; // ISO 639-1 language code, e.g., "hu", "es", "fr"
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -12,6 +13,7 @@ export const DEFAULT_SETTINGS: Settings = {
   box_intervals: [1, 2, 4, 8, 16, 30],
   extra_seconds: 2.0,
   onboarding_completed: false,
+  current_language: 'hu', // Default to Hungarian
 };
 
 export function createSettings(overrides?: Partial<Settings>): Settings {
@@ -35,5 +37,6 @@ export function validateSettings(settings: Partial<Settings>): Settings {
     box_intervals: settings.box_intervals || DEFAULT_SETTINGS.box_intervals,
     extra_seconds: settings.extra_seconds ?? DEFAULT_SETTINGS.extra_seconds,
     onboarding_completed: settings.onboarding_completed ?? DEFAULT_SETTINGS.onboarding_completed,
+    current_language: settings.current_language || DEFAULT_SETTINGS.current_language,
   };
 }

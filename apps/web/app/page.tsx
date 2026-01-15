@@ -24,10 +24,12 @@ export default function Home() {
   useEffect(() => {
     async function loadStats() {
       const storage = getStorage();
-      const sentences = await storage.getSentences();
+      const appSettings = await storage.getSettings() || DEFAULT_SETTINGS;
+      const language = appSettings.current_language || 'hu';
+      const sentences = await storage.getSentences(language);
       const sessions = await storage.getSessions();
       const reviewEvents = await storage.getReviewEvents();
-      const settings = await storage.getSettings() || DEFAULT_SETTINGS;
+      const settings = appSettings;
       const incompleteSession = await storage.getIncompleteSession();
 
       const now = new Date();
@@ -48,7 +50,9 @@ export default function Home() {
 
     async function checkAndMigrate() {
       const storage = getStorage();
-      const sentences = await storage.getSentences();
+      const appSettings = await storage.getSettings() || DEFAULT_SETTINGS;
+      const language = appSettings.current_language || 'hu';
+      const sentences = await storage.getSentences(language);
       const needsMigration = sentences.some(s => 
         s.target_audio_uri && (!s.target_audio_duration_seconds || s.target_audio_duration_seconds <= 0)
       );
@@ -101,7 +105,9 @@ export default function Home() {
           }
           
           // Reload stats after migration
-          const updatedSentences = await storage.getSentences();
+          const appSettings = await storage.getSettings() || DEFAULT_SETTINGS;
+          const language = appSettings.current_language || 'hu';
+          const updatedSentences = await storage.getSentences(language);
           const updatedReviewEvents = await storage.getReviewEvents();
           setStabilized(countStabilized(updatedSentences, updatedReviewEvents));
         } else {

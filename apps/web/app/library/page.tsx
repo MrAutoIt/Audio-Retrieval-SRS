@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getStorage } from '@/lib/storage';
-import { Sentence } from '@audio-retrieval-srs/core';
+import { Sentence, Settings, DEFAULT_SETTINGS } from '@audio-retrieval-srs/core';
 import Link from 'next/link';
 
 export default function LibraryPage() {
@@ -24,7 +24,9 @@ export default function LibraryPage() {
 
   async function loadSentences() {
     const storage = getStorage();
-    const allSentences = await storage.getSentences();
+    const settings = await storage.getSettings() || DEFAULT_SETTINGS;
+    const language = settings.current_language || 'hu';
+    const allSentences = await storage.getSentences(language);
     const eligibleSentences = allSentences.filter(s => s.is_eligible);
     setSentences(eligibleSentences);
     setLoading(false);

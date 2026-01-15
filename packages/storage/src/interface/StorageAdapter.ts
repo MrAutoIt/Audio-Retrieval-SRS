@@ -6,9 +6,27 @@ import { Settings } from '@audio-retrieval-srs/core';
 /**
  * Abstract storage interface for platform-specific implementations.
  */
+export interface PendingAudioMetadata {
+  id: string;
+  filename: string;
+  languageCode: string;
+  detectedLanguage?: string;
+  uploadedAt: Date;
+  processedAt?: Date;
+  segments?: Array<{
+    id: string;
+    start: number;
+    end: number;
+    originalText: string;
+    englishText: string;
+    isAdjusted?: boolean;
+  }>;
+  tags?: string[];
+}
+
 export interface StorageAdapter {
   // Sentences
-  getSentences(): Promise<Sentence[]>;
+  getSentences(languageCode?: string): Promise<Sentence[]>;
   getSentence(id: string): Promise<Sentence | null>;
   saveSentence(sentence: Sentence): Promise<void>;
   updateSentence(sentence: Sentence): Promise<void>;
@@ -37,6 +55,13 @@ export interface StorageAdapter {
   getAudio(sentenceId: string): Promise<Blob | null>;
   deleteAudio(sentenceId: string): Promise<void>;
   audioExists(sentenceId: string): Promise<boolean>;
+  
+  // Pending Audio (for Whisper processing)
+  savePendingAudio(audioId: string, audioData: Blob | ArrayBuffer, metadata: PendingAudioMetadata): Promise<void>;
+  getPendingAudio(audioId: string): Promise<Blob | null>;
+  getAllPendingAudios(languageCode?: string): Promise<PendingAudioMetadata[]>;
+  deletePendingAudio(audioId: string): Promise<void>;
+  updatePendingAudioMetadata(audioId: string, metadata: Partial<PendingAudioMetadata>): Promise<void>;
   
   // Import/Export
   exportAll(): Promise<{

@@ -1,4 +1,4 @@
-import { StorageAdapter } from '../interface/StorageAdapter';
+import { StorageAdapter, PendingAudioMetadata } from '../interface/StorageAdapter';
 import { Sentence, ReviewEvent, Session, Settings, DEFAULT_SETTINGS } from '@audio-retrieval-srs/core';
 import Dexie, { Table } from 'dexie';
 
@@ -28,12 +28,19 @@ interface AudioRecord {
   filename: string;
 }
 
+interface PendingAudioRecord {
+  audioId: string;
+  data: Blob;
+  metadata: string; // JSON stringified PendingAudioMetadata
+}
+
 class AudioRetrievalDB extends Dexie {
   sentences!: Table<SentenceRecord>;
   reviewEvents!: Table<ReviewEventRecord>;
   sessions!: Table<SessionRecord>;
   settings!: Table<SettingsRecord>;
   audio!: Table<AudioRecord>;
+  pendingAudio!: Table<PendingAudioRecord>;
 
   constructor() {
     super('AudioRetrievalSRS');
@@ -43,6 +50,14 @@ class AudioRetrievalDB extends Dexie {
       sessions: 'id, started_at',
       settings: 'id',
       audio: 'sentenceId',
+    });
+    this.version(2).stores({
+      sentences: 'id',
+      reviewEvents: 'id, sentence_id, session_id, timestamp',
+      sessions: 'id, started_at',
+      settings: 'id',
+      audio: 'sentenceId',
+      pendingAudio: 'audioId',
     });
   }
 }
@@ -55,9 +70,13 @@ export class IndexedDBStorage implements StorageAdapter {
   }
 
   // Sentences
-  async getSentences(): Promise<Sentence[]> {
+  async getSentences(languageCode?: string): Promise<Sentence[]> {
     const records = await this.db.sentences.toArray();
-    return records.map(r => this.deserializeSentence(r.data));
+    const sentences = records.map(r => this.deserializeSentence(r.data));
+    if (languageCode) {
+      return sentences.filter(s => s.language_code === languageCode);
+    }
+    return sentences;
   }
 
   async getSentence(id: string): Promise<Sentence | null> {
@@ -189,6 +208,66 @@ export class IndexedDBStorage implements StorageAdapter {
     return count > 0;
   }
 
+  // Pending Audio
+  async savePendingAudio(audioId: string, audioData: Blob | ArrayBuffer, metadata: PendingAudioMetadata): Promise<void> {
+    const blob = audioData instanceof Blob ? audioData : new Blob([audioData]);
+    await this.db.pendingAudio.put({
+      audioId,
+      data: blob,
+      metadata: JSON.stringify({
+        ...metadata,
+        uploadedAt: metadata.uploadedAt.toISOString(),
+        processedAt: metadata.processedAt?.toISOString(),
+      }),
+    });
+  }
+
+  async getPendingAudio(audioId: string): Promise<Blob | null> {
+    const record = await this.db.pendingAudio.get(audioId);
+    return record?.data || null;
+  }
+
+  async getAllPendingAudios(languageCode?: string): Promise<PendingAudioMetadata[]> {
+    const records = await this.db.pendingAudio.toArray();
+    const metadataList = records.map(r => {
+      const meta = JSON.parse(r.metadata);
+      return {
+        ...meta,
+        uploadedAt: new Date(meta.uploadedAt),
+        processedAt: meta.processedAt ? new Date(meta.processedAt) : undefined,
+      } as PendingAudioMetadata;
+    });
+    if (languageCode) {
+      return metadataList.filter(m => m.languageCode === languageCode);
+    }
+    return metadataList;
+  }
+
+  async deletePendingAudio(audioId: string): Promise<void> {
+    await this.db.pendingAudio.delete(audioId);
+  }
+
+  async updatePendingAudioMetadata(audioId: string, metadata: Partial<PendingAudioMetadata>): Promise<void> {
+    const record = await this.db.pendingAudio.get(audioId);
+    if (!record) {
+      throw new Error(`Pending audio ${audioId} not found`);
+    }
+    const existing = JSON.parse(record.metadata);
+    const updated: PendingAudioMetadata = {
+      ...existing,
+      ...metadata,
+      uploadedAt: existing.uploadedAt ? new Date(existing.uploadedAt) : new Date(),
+      processedAt: metadata.processedAt ? metadata.processedAt : (existing.processedAt ? new Date(existing.processedAt) : undefined),
+    };
+    await this.db.pendingAudio.update(audioId, {
+      metadata: JSON.stringify({
+        ...updated,
+        uploadedAt: updated.uploadedAt.toISOString(),
+        processedAt: updated.processedAt?.toISOString(),
+      }),
+    });
+  }
+
   // Import/Export
   async exportAll(): Promise<{
     sentences: Sentence[];
@@ -265,6 +344,7 @@ export class IndexedDBStorage implements StorageAdapter {
     await this.db.sessions.clear();
     await this.db.settings.clear();
     await this.db.audio.clear();
+    await this.db.pendingAudio.clear();
   }
 
   // Serialization helpers

@@ -140,7 +140,9 @@ export default function SessionPage() {
 
   async function loadQueues(session: Session, settings: Settings) {
     const storage = getStorage();
-    const sentences = await storage.getSentences();
+    const appSettings = await storage.getSettings() || DEFAULT_SETTINGS;
+    const language = appSettings.current_language || 'hu';
+    const sentences = await storage.getSentences(language);
     const reviewEvents = await storage.getReviewEvents();
 
     const due = buildDueQueue(sentences, session, settings);

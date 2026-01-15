@@ -16,12 +16,24 @@ Monorepo structure:
 
 - Node.js 18+
 - pnpm 8+
+- FFmpeg (for audio segmentation) - [Download FFmpeg](https://ffmpeg.org/download.html) and ensure it's in your PATH
+- OpenAI API key (for Whisper transcription)
 
 ### Installation
 
 ```bash
 pnpm install
 ```
+
+### Environment Setup
+
+Create a `.env.local` file in the `apps/web` directory:
+
+```bash
+OPENAI_API_KEY=sk-your-openai-api-key-here
+```
+
+**Note:** The OpenAI API key is required for the Whisper transcription feature. Get your API key from [OpenAI](https://platform.openai.com/api-keys).
 
 ### Development
 
@@ -56,6 +68,11 @@ pnpm test:core
 - Background audio support on iOS
 - Local storage with export/import
 - Session persistence and recovery
+- **OpenAI Whisper Integration**: Upload audio files to automatically transcribe and translate into sentence pairs
+- **Multi-language Support**: Study multiple languages with separate data storage per language
+- **Time-aligned Audio Segments**: Extract individual sentence audio clips from longer recordings
+- **Duplicate Detection**: Fuzzy matching to identify similar sentences before adding
+- **Sentence Validation**: Automatic filtering to ensure only complete sentences are saved
 
 ## License
 

@@ -1,4 +1,4 @@
-import { StorageAdapter } from '../interface/StorageAdapter';
+import { StorageAdapter, PendingAudioMetadata } from '../interface/StorageAdapter';
 import { Sentence, ReviewEvent, Session, Settings, DEFAULT_SETTINGS } from '@audio-retrieval-srs/core';
 
 /**
@@ -10,7 +10,7 @@ export class SQLiteStorage implements StorageAdapter {
   // Placeholder implementation - to be implemented in mobile app with expo-sqlite
   // This file exists to satisfy the interface but actual implementation happens in the mobile app
 
-  async getSentences(): Promise<Sentence[]> {
+  async getSentences(languageCode?: string): Promise<Sentence[]> {
     throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
   }
 
@@ -115,6 +115,27 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   async clearAll(): Promise<void> {
+    throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
+  }
+
+  // Pending Audio
+  async savePendingAudio(audioId: string, audioData: Blob | ArrayBuffer, metadata: PendingAudioMetadata): Promise<void> {
+    throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
+  }
+
+  async getPendingAudio(audioId: string): Promise<Blob | null> {
+    throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
+  }
+
+  async getAllPendingAudios(languageCode?: string): Promise<PendingAudioMetadata[]> {
+    throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
+  }
+
+  async deletePendingAudio(audioId: string): Promise<void> {
+    throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
+  }
+
+  async updatePendingAudioMetadata(audioId: string, metadata: Partial<PendingAudioMetadata>): Promise<void> {
     throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
   }
 }
