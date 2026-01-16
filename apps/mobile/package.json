@@ -1,9 +1,10 @@
 {
   "name": "mobile",
   "version": "0.1.0",
-  "main": "expo-router",
+  "main": "./index.js",
   "scripts": {
     "start": "expo start",
+    "start:tunnel": "expo start --tunnel",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"
@@ -11,18 +12,18 @@
   "dependencies": {
     "@audio-retrieval-srs/core": "workspace:*",
     "@audio-retrieval-srs/storage": "workspace:*",
-    "expo": "~50.0.0",
-    "expo-av": "~13.10.0",
-    "expo-speech": "~11.6.0",
-    "expo-sqlite": "~13.0.0",
-    "expo-file-system": "~16.0.0",
-    "expo-router": "~3.4.0",
-    "react": "18.2.0",
-    "react-native": "0.73.0"
+    "expo": "~54.0.31",
+    "expo-av": "~16.0.7",
+    "expo-file-system": "~19.0.21",
+    "expo-router": "~6.0.21",
+    "expo-speech": "~14.0.8",
+    "expo-sqlite": "~16.0.10",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
-    "@types/react": "~18.2.45",
+    "@types/react": "~19.1.17",
     "typescript": "^5.3.3"
   },
   "private": true

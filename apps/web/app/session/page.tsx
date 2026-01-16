@@ -50,6 +50,11 @@ export default function SessionPage() {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<Date | null>(null);
+  const capturingRatingRef = useRef(false);
+  const recognitionRestartTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const preloadedAudioRef = useRef<{ sentenceId: string; blob: Blob; url: string } | null>(null);
+  const intentionalAbortRef = useRef<{ recognition: SpeechRecognition | null; timestamp: number } | null>(null);
+  const abortErrorCountRef = useRef<{ recognition: SpeechRecognition; count: number; lastAbort: number } | null>(null);
 
   useEffect(() => {
     initializeSession();
@@ -59,9 +64,22 @@ export default function SessionPage() {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
+      if (recognitionRestartTimeoutRef.current) {
+        clearTimeout(recognitionRestartTimeoutRef.current);
       }
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+          recognitionRef.current.abort();
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+      if (preloadedAudioRef.current?.url) {
+        URL.revokeObjectURL(preloadedAudioRef.current.url);
+        preloadedAudioRef.current = null;
+      }
+      capturingRatingRef.current = false;
     };
   }, []);
 
@@ -215,6 +233,25 @@ export default function SessionPage() {
 
     setCurrentItem(itemState);
 
+    // Preload audio in the background so it's ready when needed
+    storage.getAudio(sentence.id).then(audio => {
+      if (audio) {
+        // Clean up previous preloaded audio
+        if (preloadedAudioRef.current?.url) {
+          URL.revokeObjectURL(preloadedAudioRef.current.url);
+        }
+        const url = URL.createObjectURL(audio);
+        preloadedAudioRef.current = {
+          sentenceId: sentence.id,
+          blob: audio,
+          url: url
+        };
+        console.log('Audio preloaded for sentence:', sentence.id);
+      }
+    }).catch(err => {
+      console.error('Failed to preload audio:', err);
+    });
+
     // Play English prompt via TTS - use a small delay to ensure state is set
     setTimeout(() => {
       if ('speechSynthesis' in window) {
@@ -223,10 +260,24 @@ export default function SessionPage() {
         
         const utterance = new SpeechSynthesisUtterance(sentence.english_translation_text);
         utterance.onend = () => {
+          console.log('TTS ended, transitioning to response phase');
           // Move to response phase
           setCurrentItem(prev => {
+            if (!prev || prev.sentence.id !== sentence.id) {
+              console.warn('TTS onend: item mismatch or missing', { prevId: prev?.sentence.id, sentenceId: sentence.id });
+              return prev;
+            }
+            const result = processItem(prev, settings, queueLengthRef.current || currentQueue.length, currentPositionRef.current || currentPosition);
+            console.log('TTS onend: processItem result', { oldPhase: prev.phase, newPhase: result.nextState?.phase });
+            return result.nextState || prev;
+          });
+        };
+        utterance.onerror = (event) => {
+          console.error('TTS error:', event);
+          // Fallback: transition to response phase even if TTS errors
+          setCurrentItem(prev => {
             if (!prev || prev.sentence.id !== sentence.id) return prev;
-            const result = processItem(prev, settings, currentQueue.length, currentPosition);
+            const result = processItem(prev, settings, queueLengthRef.current || currentQueue.length, currentPositionRef.current || currentPosition);
             return result.nextState || prev;
           });
         };
@@ -251,33 +302,76 @@ export default function SessionPage() {
   const queueLength = currentQueue.length;
   const extraQueueLength = extraQueue.length;
 
+  // Use refs to always access latest state in intervals
+  const currentItemRef = useRef(currentItem);
+  const sessionRef = useRef(session);
+  const isPlayingAnswerRef = useRef(isPlayingAnswer);
+  const currentPositionRef = useRef(currentPosition);
+  const queueLengthRef = useRef(queueLength);
+  const extraQueueRef = useRef(extraQueue);
+  const dueQueueCompleteRef = useRef(dueQueueComplete);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    currentItemRef.current = currentItem;
+  }, [currentItem]);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+  useEffect(() => {
+    isPlayingAnswerRef.current = isPlayingAnswer;
+  }, [isPlayingAnswer]);
+  useEffect(() => {
+    currentPositionRef.current = currentPosition;
+  }, [currentPosition]);
+  useEffect(() => {
+    queueLengthRef.current = queueLength;
+  }, [queueLength]);
+  useEffect(() => {
+    extraQueueRef.current = extraQueue;
+  }, [extraQueue]);
+  useEffect(() => {
+    dueQueueCompleteRef.current = dueQueueComplete;
+  }, [dueQueueComplete]);
+
   useEffect(() => {
     if (!currentItem || !session) return;
 
     // Only check phase transitions, don't trigger TTS here
     const checkPhase = setInterval(() => {
-      if (!currentItem || !session || isPlayingAnswer) return; // Don't check while audio is playing
+      // Always read from refs to get latest state
+      const currentItemState = currentItemRef.current;
+      const sessionState = sessionRef.current;
+      const isPlaying = isPlayingAnswerRef.current;
+      
+      if (!currentItemState || !sessionState || isPlaying) return; // Don't check while audio is playing
 
-      const settings = session.settings_snapshot;
-      const result = processItem(currentItem, settings, queueLength, currentPosition);
+      const settings = sessionState.settings_snapshot;
+      const result = processItem(currentItemState, settings, queueLengthRef.current, currentPositionRef.current);
 
       // Only handle phase transitions that don't involve TTS
-      if (result.shouldPlayAnswer && currentItem.phase === 'response' && !isPlayingAnswer) {
+      if (result.shouldPlayAnswer && currentItemState.phase === 'response' && !isPlaying) {
+        console.log('Interval detected shouldPlayAnswer, calling playTargetAudio', { phase: currentItemState.phase });
         playTargetAudio();
       }
 
-      // Only update state if phase actually changed (avoid unnecessary updates)
+      // Handle automatic phase transitions (e.g., prompt -> response if TTS onend didn't fire)
       // But don't auto-transition from 'answer' phase - let audio control that
-      if (result.nextState && result.nextState.phase !== currentItem.phase && currentItem.phase !== 'answer') {
+      if (result.nextState && result.nextState.phase !== currentItemState.phase && currentItemState.phase !== 'answer') {
+        // Special case: if we're still in 'prompt' phase but TTS should have finished,
+        // transition to 'response' (defensive against TTS onend not firing)
+        if (currentItemState.phase === 'prompt' && result.nextState.phase === 'response') {
+          console.log('Auto-transitioning from prompt to response (TTS may have finished silently)');
+        }
         setCurrentItem(result.nextState);
       }
 
-      if (result.dueQueueComplete && !dueQueueComplete) {
+      if (result.dueQueueComplete && !dueQueueCompleteRef.current) {
         setDueQueueComplete(true);
         playDueCompleteNotice();
         // Switch to extra queue
-        if (extraQueue.length > 0) {
-          setCurrentQueue(extraQueue);
+        if (extraQueueRef.current.length > 0) {
+          setCurrentQueue(extraQueueRef.current);
           setCurrentPosition(0);
         }
       }
@@ -287,35 +381,117 @@ export default function SessionPage() {
   }, [currentPhase, currentSentenceId, sessionId, queueLength, currentPosition, dueQueueComplete, isPlayingAnswer, extraQueueLength]);
 
   async function playTargetAudio() {
-    if (!currentItem || !session || isPlayingAnswer) return;
-
-    const storage = getStorage();
-    const audio = await storage.getAudio(currentItem.sentence.id);
+    // Always read from refs to get latest state
+    const currentItemState = currentItemRef.current;
+    const sessionState = sessionRef.current;
+    const isPlaying = isPlayingAnswerRef.current;
     
-    if (!audio) {
+    if (!currentItemState || !sessionState || isPlaying) {
+      console.log('playTargetAudio: conditions not met', { hasItem: !!currentItemState, hasSession: !!sessionState, isPlaying });
+      return;
+    }
+
+    const startTime = performance.now();
+    console.log('playTargetAudio: starting', { sentenceId: currentItemState.sentence.id, phase: currentItemState.phase });
+
+    // Set playing state immediately before loading
+    setIsPlayingAnswer(true);
+    isPlayingAnswerRef.current = true;
+    
+    // First, transition to answer phase (show "Playing answer..." immediately)
+    setCurrentItem(prev => {
+      if (!prev) return prev;
+      const nextState = {
+        ...prev,
+        phase: 'answer' as const,
+        startTime: new Date(),
+      };
+      // Update ref immediately
+      currentItemRef.current = nextState;
+      return nextState;
+    });
+
+    let audio: Blob | null = null;
+    let audioUrl: string | null = null;
+
+    // Try to use preloaded audio first
+    if (preloadedAudioRef.current?.sentenceId === currentItemState.sentence.id) {
+      console.log('Using preloaded audio');
+      audio = preloadedAudioRef.current.blob;
+      audioUrl = preloadedAudioRef.current.url;
+      // Clear the ref so we don't revoke the URL prematurely
+      preloadedAudioRef.current = null;
+    } else {
+      // Fallback: load from storage
+      console.log('Loading audio from storage (not preloaded)');
+      const storage = getStorage();
+      audio = await storage.getAudio(currentItemState.sentence.id);
+      
+      if (!audio) {
+        setIsPlayingAnswer(false);
+        isPlayingAnswerRef.current = false;
+        moveToNextItem();
+        return;
+      }
+      
+      audioUrl = URL.createObjectURL(audio);
+    }
+
+    const loadTime = performance.now() - startTime;
+    console.log(`Audio loaded in ${loadTime.toFixed(2)}ms`);
+
+    const audioElement = new Audio(audioUrl);
+    audioRef.current = audioElement;
+
+    // Preload the audio element to ensure it's ready to play
+    audioElement.preload = 'auto';
+    
+    // Wait for audio to be ready before playing
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        console.warn('Audio ready timeout, attempting to play anyway');
+        resolve();
+      }, 5000); // 5 second timeout
+
+      if (audioElement.readyState >= 2) { // HAVE_CURRENT_DATA or higher
+        clearTimeout(timeout);
+        resolve();
+      } else {
+        audioElement.addEventListener('canplay', () => {
+          clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+        audioElement.addEventListener('error', (e) => {
+          clearTimeout(timeout);
+          reject(e);
+        }, { once: true });
+        // Trigger loading
+        audioElement.load();
+      }
+    });
+
+    try {
+      await readyPromise;
+      const readyTime = performance.now() - startTime;
+      console.log(`Audio ready in ${readyTime.toFixed(2)}ms`);
+
+      // Now play the audio
+      await audioElement.play();
+      const playTime = performance.now() - startTime;
+      console.log(`Audio started playing in ${playTime.toFixed(2)}ms total`);
+    } catch (error: any) {
+      setIsPlayingAnswer(false);
+      isPlayingAnswerRef.current = false;
+      console.error('Failed to play audio:', error);
+      URL.revokeObjectURL(audioUrl!);
       moveToNextItem();
       return;
     }
 
-    setIsPlayingAnswer(true);
-    
-    // First, transition to answer phase
-    setCurrentItem(prev => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        phase: 'answer',
-        startTime: new Date(),
-      };
-    });
-
-    const url = URL.createObjectURL(audio);
-    const audioElement = new Audio(url);
-    audioRef.current = audioElement;
-
     audioElement.onended = () => {
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(audioUrl!);
       setIsPlayingAnswer(false);
+      isPlayingAnswerRef.current = false;
       // Move to rating phase after audio finishes
       setCurrentItem(prev => {
         if (!prev) return prev;
@@ -333,30 +509,26 @@ export default function SessionPage() {
       }, 300);
     };
 
-    audioElement.onerror = () => {
-      URL.revokeObjectURL(url);
+    audioElement.onerror = (e) => {
+      console.error('Audio element error:', e);
+      URL.revokeObjectURL(audioUrl!);
       setIsPlayingAnswer(false);
+      isPlayingAnswerRef.current = false;
       moveToNextItem();
     };
 
     audioElement.onplay = () => {
+      console.log('Audio playback started');
       // Ensure we're in answer phase when audio starts
       setCurrentItem(prev => {
         if (!prev || prev.phase !== 'answer') return prev;
         return prev;
       });
     };
-
-    try {
-      await audioElement.play();
-    } catch (error) {
-      setIsPlayingAnswer(false);
-      console.error('Failed to play audio:', error);
-      moveToNextItem();
-    }
   }
 
   function startRatingCapture() {
+    capturingRatingRef.current = true;
     setCapturingRating(true);
 
     if (speechAvailable && !usingFallback) {
@@ -368,14 +540,48 @@ export default function SessionPage() {
   }
 
   function startSpeechRecognition() {
+    // Clear any pending restart timeout
+    if (recognitionRestartTimeoutRef.current) {
+      clearTimeout(recognitionRestartTimeoutRef.current);
+      recognitionRestartTimeoutRef.current = null;
+    }
+    
     // Clean up any existing recognition instance
     if (recognitionRef.current) {
+      // Mark this as an intentional abort so onend doesn't try to restart
+      const oldRecognition = recognitionRef.current;
+      intentionalAbortRef.current = {
+        recognition: oldRecognition,
+        timestamp: Date.now()
+      };
+      
+      // Clear abort error count for the old recognition
+      if (abortErrorCountRef.current?.recognition === oldRecognition) {
+        abortErrorCountRef.current = null;
+      }
+      
+      // Clear any pending restart timeout
+      if (recognitionRestartTimeoutRef.current) {
+        clearTimeout(recognitionRestartTimeoutRef.current);
+        recognitionRestartTimeoutRef.current = null;
+      }
+      
       try {
-        recognitionRef.current.stop();
+        oldRecognition.stop();
+        oldRecognition.abort(); // Force abort to ensure clean state
       } catch (e) {
         // Ignore errors from stopping
       }
+      
+      // Clear the ref immediately - don't wait for onend
       recognitionRef.current = null;
+      
+      // Clear the intentional abort flag after a delay to allow onend to fire
+      setTimeout(() => {
+        if (intentionalAbortRef.current?.recognition === oldRecognition) {
+          intentionalAbortRef.current = null;
+        }
+      }, 1000);
     }
 
     const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -392,6 +598,18 @@ export default function SessionPage() {
 
     recognition.onresult = (event: any) => {
       console.log('Recognition result received');
+      
+      // Clear any pending restart timeout
+      if (recognitionRestartTimeoutRef.current) {
+        clearTimeout(recognitionRestartTimeoutRef.current);
+        recognitionRestartTimeoutRef.current = null;
+      }
+      
+      // Reset abort error count on successful result
+      if (abortErrorCountRef.current?.recognition === recognition) {
+        abortErrorCountRef.current = null;
+      }
+      
       const transcript = event.results[0][0].transcript.toLowerCase().trim();
       console.log('Transcript:', transcript);
       let rating: Rating | null = null;
@@ -412,19 +630,18 @@ export default function SessionPage() {
       } else {
         console.log('No valid rating found in transcript:', transcript);
         // Restart recognition to keep listening
-        setTimeout(() => {
-          if (recognitionRef.current === recognition) {
-            setCapturingRating(prev => {
-              if (prev) {
-                try {
-                  recognition.start();
-                } catch (e) {
-                  console.error('Failed to restart recognition:', e);
-                  setUsingFallback(true);
-                }
+        recognitionRestartTimeoutRef.current = setTimeout(() => {
+          if (recognitionRef.current === recognition && capturingRatingRef.current && !usingFallback) {
+            try {
+              console.log('Restarting recognition after invalid transcript...');
+              recognition.start();
+            } catch (e: any) {
+              console.error('Failed to restart recognition after invalid transcript:', e);
+              // If it's an InvalidStateError, the recognition might already be starting
+              if (e.name !== 'InvalidStateError') {
+                setUsingFallback(true);
               }
-              return prev;
-            });
+            }
           }
         }, 500);
       }
@@ -432,51 +649,150 @@ export default function SessionPage() {
 
     recognition.onerror = (event: any) => {
       console.log('Recognition error:', event.error, event.message);
+      
+      // Clear any pending restart timeout
+      if (recognitionRestartTimeoutRef.current) {
+        clearTimeout(recognitionRestartTimeoutRef.current);
+        recognitionRestartTimeoutRef.current = null;
+      }
+      
       // Handle different error types
       if (event.error === 'no-speech') {
+        // Reset abort error count on successful no-speech (expected behavior)
+        abortErrorCountRef.current = null;
         // No speech detected - recognition will auto-restart via onend handler
+        // Don't restart here, let onend handle it
         return;
       }
       if (event.error === 'aborted') {
-        // Recognition was aborted - this is expected when we stop it
+        // Track abort errors - if we get too many rapid aborts, stop trying to restart
+        const now = Date.now();
+        if (abortErrorCountRef.current?.recognition === recognition) {
+          abortErrorCountRef.current.count++;
+          abortErrorCountRef.current.lastAbort = now;
+          
+          // If we've had multiple aborts in quick succession, give up
+          if (abortErrorCountRef.current.count >= 3 && (now - abortErrorCountRef.current.lastAbort) < 1000) {
+            console.error('Too many rapid aborts detected, stopping recognition');
+            capturingRatingRef.current = false;
+            setCapturingRating(false);
+            setUsingFallback(true);
+            abortErrorCountRef.current = null;
+            return;
+          }
+        } else {
+          abortErrorCountRef.current = {
+            recognition: recognition,
+            count: 1,
+            lastAbort: now
+          };
+        }
+        
+        // If this was an intentional abort, we'll ignore the onend restart
+        // If it wasn't intentional, onend will handle restart
         return;
       }
+      
+      // Reset abort error count on other errors
+      abortErrorCountRef.current = null;
       if (event.error === 'not-allowed') {
         // Microphone permission denied
         console.error('Microphone permission denied');
+        capturingRatingRef.current = false;
         setUsingFallback(true);
         return;
       }
+      if (event.error === 'network') {
+        // Network error - try to restart
+        console.warn('Recognition network error, will attempt restart');
+        return; // Let onend handle restart
+      }
       // Other errors - log and fallback
       console.error('Recognition error:', event.error, event.message);
+      capturingRatingRef.current = false;
       setUsingFallback(true);
     };
 
     recognition.onend = () => {
-      console.log('Recognition ended, recognitionRef matches:', recognitionRef.current === recognition);
+      console.log('Recognition ended, recognitionRef matches:', recognitionRef.current === recognition, 'capturingRatingRef:', capturingRatingRef.current);
+      
+      // Clear any pending restart timeout first
+      if (recognitionRestartTimeoutRef.current) {
+        clearTimeout(recognitionRestartTimeoutRef.current);
+        recognitionRestartTimeoutRef.current = null;
+      }
+      
+      // Check if this was an intentional abort (e.g., when starting new recognition or stopping)
+      const wasIntentionalAbort = intentionalAbortRef.current?.recognition === recognition;
+      if (wasIntentionalAbort) {
+        console.log('Recognition ended due to intentional abort, not restarting');
+        // Clear the intentional abort flag and abort error count
+        setTimeout(() => {
+          if (intentionalAbortRef.current?.recognition === recognition) {
+            intentionalAbortRef.current = null;
+          }
+          if (abortErrorCountRef.current?.recognition === recognition) {
+            abortErrorCountRef.current = null;
+          }
+        }, 100);
+        return;
+      }
+      
+      // Check if we've had too many abort errors - if so, don't restart
+      if (abortErrorCountRef.current?.recognition === recognition && abortErrorCountRef.current.count >= 3) {
+        console.log('Too many abort errors for this recognition instance, not restarting');
+        capturingRatingRef.current = false;
+        setCapturingRating(false);
+        setUsingFallback(true);
+        abortErrorCountRef.current = null;
+        return;
+      }
+      
       // Only restart if ref still matches (hasn't been cleared by handleRatingCapture)
       // and we're still supposed to be capturing
-      if (recognitionRef.current === recognition && capturingRating && !usingFallback) {
-        setTimeout(() => {
+      // Use capturingRatingRef instead of closure to avoid stale values
+      if (recognitionRef.current === recognition && capturingRatingRef.current && !usingFallback) {
+        recognitionRestartTimeoutRef.current = setTimeout(() => {
           // Double-check everything before restarting
-          if (recognitionRef.current === recognition) {
-            setCapturingRating(current => {
-              if (current && !usingFallback) {
-                try {
-                  console.log('Restarting recognition after onend...');
-                  recognition.start();
-                } catch (e: any) {
-                  // Ignore "already started" errors - recognition might have restarted already
-                  if (e.name !== 'InvalidStateError' || !e.message.includes('already started')) {
-                    console.error('Failed to restart recognition after onend:', e);
-                    setUsingFallback(true);
-                  }
-                }
+          // Also check that we haven't had too many aborts
+          if (recognitionRef.current === recognition && 
+              capturingRatingRef.current && 
+              !usingFallback &&
+              (!abortErrorCountRef.current || abortErrorCountRef.current.recognition !== recognition || abortErrorCountRef.current.count < 3)) {
+            try {
+              console.log('Restarting recognition after onend...');
+              recognition.start();
+              // Reset abort count on successful restart
+              if (abortErrorCountRef.current?.recognition === recognition) {
+                abortErrorCountRef.current.count = 0;
               }
-              return current;
+            } catch (e: any) {
+              // Ignore "already started" errors - recognition might have restarted already
+              if (e.name === 'InvalidStateError' && e.message?.includes('already started')) {
+                console.log('Recognition already started, ignoring error');
+              } else {
+                console.error('Failed to restart recognition after onend:', e);
+                capturingRatingRef.current = false;
+                setCapturingRating(false);
+                setUsingFallback(true);
+                abortErrorCountRef.current = null;
+              }
+            }
+          } else {
+            console.log('Skipping restart - conditions changed:', {
+              refMatches: recognitionRef.current === recognition,
+              capturing: capturingRatingRef.current,
+              usingFallback,
+              abortCount: abortErrorCountRef.current?.recognition === recognition ? abortErrorCountRef.current.count : 0
             });
           }
-        }, 300);
+        }, 500); // Increased delay to reduce rapid restart attempts
+      } else {
+        console.log('Not restarting recognition - conditions not met:', {
+          refMatches: recognitionRef.current === recognition,
+          capturing: capturingRatingRef.current,
+          usingFallback
+        });
       }
     };
 
@@ -526,19 +842,47 @@ export default function SessionPage() {
     }
 
     console.log('handleRatingCapture called with rating:', rating);
+    
+    // Clear any pending restart timeout
+    if (recognitionRestartTimeoutRef.current) {
+      clearTimeout(recognitionRestartTimeoutRef.current);
+      recognitionRestartTimeoutRef.current = null;
+    }
+    
     // Set capturingRating to false first to prevent restarts
+    capturingRatingRef.current = false;
     setCapturingRating(false);
+    
     // Stop recognition
     if (recognitionRef.current) {
+      // Mark this as an intentional abort
+      const oldRecognition = recognitionRef.current;
+      intentionalAbortRef.current = {
+        recognition: oldRecognition,
+        timestamp: Date.now()
+      };
+      
       try {
-        recognitionRef.current.stop();
+        oldRecognition.stop();
+        oldRecognition.abort(); // Force abort to ensure it stops immediately
       } catch (e) {
         // Ignore errors
       }
-      // Clear ref after a delay to allow onend to fire first
+      
+      // Clear abort error count
+      if (abortErrorCountRef.current?.recognition === oldRecognition) {
+        abortErrorCountRef.current = null;
+      }
+      
+      // Clear the ref immediately
+      recognitionRef.current = null;
+      
+      // Clear the intentional abort flag after a delay
       setTimeout(() => {
-        recognitionRef.current = null;
-      }, 100);
+        if (intentionalAbortRef.current?.recognition === oldRecognition) {
+          intentionalAbortRef.current = null;
+        }
+      }, 1000);
     }
 
     const storage = getStorage();
@@ -592,6 +936,12 @@ export default function SessionPage() {
 
   function moveToNextItem() {
     if (!session) return;
+
+    // Clean up any preloaded audio from previous item
+    if (preloadedAudioRef.current?.url) {
+      URL.revokeObjectURL(preloadedAudioRef.current.url);
+      preloadedAudioRef.current = null;
+    }
 
     const nextPosition = currentPosition + 1;
     

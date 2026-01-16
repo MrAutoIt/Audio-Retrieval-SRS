@@ -4,6 +4,7 @@
     "slug": "audio-retrieval-srs",
     "version": "0.1.0",
     "orientation": "portrait",
+    "scheme": "audio-retrieval-srs",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
@@ -32,9 +33,11 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
     },
     "plugins": [
+      "expo-router",
       [
         "expo-av",
         {

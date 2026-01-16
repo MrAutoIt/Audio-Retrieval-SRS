@@ -13,6 +13,8 @@ export default function LibraryPage() {
   const [tagFilter, setTagFilter] = useState('');
   const [boxFilter, setBoxFilter] = useState<number | null>(null);
   const [dueFilter, setDueFilter] = useState<'all' | 'due' | 'not-due'>('all');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     loadSentences();
@@ -82,6 +84,37 @@ export default function LibraryPage() {
       return 'Due Now';
     }
     return 'Not Due';
+  }
+
+  async function handleDeleteSentence(sentenceId: string) {
+    if (confirmDeleteId !== sentenceId) {
+      // First click - show confirmation
+      setConfirmDeleteId(sentenceId);
+      return;
+    }
+
+    // Second click - confirm deletion
+    setDeletingId(sentenceId);
+    setConfirmDeleteId(null);
+
+    try {
+      const storage = getStorage();
+      await storage.deleteSentence(sentenceId);
+      
+      // Remove from local state
+      setSentences(prev => prev.filter(s => s.id !== sentenceId));
+      
+      // If we're on the detail page for this sentence, it will redirect automatically
+    } catch (error) {
+      console.error('Error deleting sentence:', error);
+      alert('Failed to delete sentence. Please try again.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  function handleCancelDelete() {
+    setConfirmDeleteId(null);
   }
 
   if (loading) {
@@ -177,13 +210,15 @@ export default function LibraryPage() {
         ) : (
           <div className="space-y-2">
             {filteredSentences.map((sentence) => (
-              <Link
+              <div
                 key={sentence.id}
-                href={`/library/${sentence.id}`}
-                className="block bg-white border rounded p-4 hover:bg-gray-50"
+                className="block bg-white border rounded p-4 hover:bg-gray-50 relative group"
               >
                 <div className="flex justify-between items-start">
-                  <div className="flex-1">
+                  <Link
+                    href={`/library/${sentence.id}`}
+                    className="flex-1"
+                  >
                     <div className="font-semibold">{sentence.english_translation_text}</div>
                     {sentence.target_text && (
                       <div className="text-gray-600">{sentence.target_text}</div>
@@ -195,10 +230,51 @@ export default function LibraryPage() {
                         <span>Tags: {sentence.tags.join(', ')}</span>
                       )}
                     </div>
+                  </Link>
+                  <div className="flex items-center gap-2">
+                    {confirmDeleteId === sentence.id ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-red-600 font-semibold">Delete?</span>
+                        <button
+                          onClick={() => handleDeleteSentence(sentence.id)}
+                          disabled={deletingId === sentence.id}
+                          className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          {deletingId === sentence.id ? 'Deleting...' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={handleCancelDelete}
+                          disabled={deletingId === sentence.id}
+                          className="px-3 py-1 bg-gray-300 text-gray-700 rounded hover:bg-gray-400 disabled:opacity-50 text-sm"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <Link
+                          href={`/library/${sentence.id}`}
+                          className="text-blue-500 hover:text-blue-700"
+                        >
+                          →
+                        </Link>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleDeleteSentence(sentence.id);
+                          }}
+                          disabled={deletingId === sentence.id}
+                          className="opacity-0 group-hover:opacity-100 px-2 py-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-opacity disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                          title="Delete sentence"
+                        >
+                          {deletingId === sentence.id ? '...' : '🗑️'}
+                        </button>
+                      </>
+                    )}
                   </div>
-                  <div className="text-blue-500">→</div>
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}

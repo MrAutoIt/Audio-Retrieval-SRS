@@ -1,0 +1,1 @@
+Commit all changes and push them to the main branch. If there's any errors, fix them and continue pushing to the main branch

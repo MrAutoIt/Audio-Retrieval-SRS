@@ -6,6 +6,7 @@
     "dev:web": "pnpm --filter web dev",
     "build:web": "pnpm --filter web build",
     "dev:mobile": "pnpm --filter mobile start",
+    "dev:mobile:tunnel": "pnpm --filter mobile start:tunnel",
     "build:core": "pnpm --filter core build",
     "test:core": "pnpm --filter core test",
     "lint": "pnpm -r lint",
