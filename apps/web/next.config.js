@@ -8,6 +8,14 @@ const nextConfig = {
     };
     return config;
   },
+  async rewrites() {
+    return [
+      {
+        source: '/favicon.ico',
+        destination: '/api/favicon',
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

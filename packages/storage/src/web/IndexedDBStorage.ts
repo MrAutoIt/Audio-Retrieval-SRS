@@ -34,6 +34,13 @@ interface PendingAudioRecord {
   metadata: string; // JSON stringified PendingAudioMetadata
 }
 
+interface ExportMetadataRecord {
+  sentenceId: string;
+  exportedAt: string; // ISO string
+  exportPackageId: string;
+  cardId: string;
+}
+
 class AudioRetrievalDB extends Dexie {
   sentences!: Table<SentenceRecord>;
   reviewEvents!: Table<ReviewEventRecord>;
@@ -41,6 +48,7 @@ class AudioRetrievalDB extends Dexie {
   settings!: Table<SettingsRecord>;
   audio!: Table<AudioRecord>;
   pendingAudio!: Table<PendingAudioRecord>;
+  exportMetadata!: Table<ExportMetadataRecord>;
 
   constructor() {
     super('AudioRetrievalSRS');
@@ -59,6 +67,15 @@ class AudioRetrievalDB extends Dexie {
       audio: 'sentenceId',
       pendingAudio: 'audioId',
     });
+    this.version(3).stores({
+      sentences: 'id',
+      reviewEvents: 'id, sentence_id, session_id, timestamp',
+      sessions: 'id, started_at',
+      settings: 'id',
+      audio: 'sentenceId',
+      pendingAudio: 'audioId',
+      exportMetadata: 'sentenceId',
+    });
   }
 }
 
@@ -67,6 +84,14 @@ export class IndexedDBStorage implements StorageAdapter {
 
   constructor() {
     this.db = new AudioRetrievalDB();
+    // Verify database is open and exportMetadata table exists
+    this.db.open().then(() => {
+      console.log('[IndexedDB] Database opened successfully');
+      console.log('[IndexedDB] Database version:', this.db.verno);
+      console.log('[IndexedDB] Tables:', Object.keys(this.db.tables));
+    }).catch(err => {
+      console.error('[IndexedDB] Failed to open database:', err);
+    });
   }
 
   // Sentences
@@ -337,6 +362,80 @@ export class IndexedDBStorage implements StorageAdapter {
     }
   }
 
+  // Export Metadata
+  async getExportMetadata(sentenceId: string): Promise<{ exportedAt: Date; exportPackageId: string; cardId: string } | null> {
+    const record = await this.db.exportMetadata.get(sentenceId);
+    if (!record) return null;
+    return {
+      exportedAt: new Date(record.exportedAt),
+      exportPackageId: record.exportPackageId,
+      cardId: record.cardId,
+    };
+  }
+
+  async getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt: Date; exportPackageId: string; cardId: string }>> {
+    const metadataMap = new Map<string, { exportedAt: Date; exportPackageId: string; cardId: string }>();
+    
+    if (sentenceIds.length === 0) {
+      console.log('[IndexedDB] getAllExportMetadata: No sentence IDs provided');
+      return metadataMap;
+    }
+    
+    console.log(`[IndexedDB] getAllExportMetadata: Querying for ${sentenceIds.length} sentence IDs`);
+    
+    // First, check how many records exist in the table
+    const totalCount = await this.db.exportMetadata.count();
+    console.log(`[IndexedDB] getAllExportMetadata: Total records in exportMetadata table: ${totalCount}`);
+    
+    // Batch fetch all metadata records at once
+    const records = await this.db.exportMetadata.where('sentenceId').anyOf(sentenceIds).toArray();
+    console.log(`[IndexedDB] getAllExportMetadata: Found ${records.length} matching records`);
+    
+    if (records.length === 0 && totalCount > 0) {
+      console.warn('[IndexedDB] getAllExportMetadata: No matching records found, but table has records. Checking if sentenceIds match...');
+      // Debug: show all records in the table
+      const allRecords = await this.db.exportMetadata.toArray();
+      console.log('[IndexedDB] getAllExportMetadata: All records in table:', allRecords.map(r => ({ sentenceId: r.sentenceId, exportedAt: r.exportedAt })));
+      console.log('[IndexedDB] getAllExportMetadata: Looking for sentenceIds:', sentenceIds);
+    }
+    
+    for (const record of records) {
+      console.log(`[IndexedDB] getAllExportMetadata: Processing record for sentenceId: ${record.sentenceId}`);
+      metadataMap.set(record.sentenceId, {
+        exportedAt: new Date(record.exportedAt),
+        exportPackageId: record.exportPackageId,
+        cardId: record.cardId,
+      });
+    }
+    
+    console.log(`[IndexedDB] getAllExportMetadata: Returning map with ${metadataMap.size} entries`);
+    return metadataMap;
+  }
+
+  async saveExportMetadata(sentenceId: string, exportPackageId: string, cardId: string): Promise<void> {
+    const record: ExportMetadataRecord = {
+      sentenceId,
+      exportedAt: new Date().toISOString(),
+      exportPackageId,
+      cardId,
+    };
+    console.log('[IndexedDB] saveExportMetadata: Saving record:', record);
+    await this.db.exportMetadata.put(record);
+    console.log('[IndexedDB] saveExportMetadata: Record saved successfully');
+    
+    // Verify it was saved
+    const verify = await this.db.exportMetadata.get(sentenceId);
+    if (verify) {
+      console.log('[IndexedDB] saveExportMetadata: Verified saved record:', verify);
+    } else {
+      console.error('[IndexedDB] saveExportMetadata: WARNING - Record not found after save!');
+    }
+  }
+
+  async deleteExportMetadata(sentenceId: string): Promise<void> {
+    await this.db.exportMetadata.delete(sentenceId);
+  }
+
   // Utility
   async clearAll(): Promise<void> {
     await this.db.sentences.clear();
@@ -345,6 +444,7 @@ export class IndexedDBStorage implements StorageAdapter {
     await this.db.settings.clear();
     await this.db.audio.clear();
     await this.db.pendingAudio.clear();
+    await this.db.exportMetadata.clear();
   }
 
   // Serialization helpers

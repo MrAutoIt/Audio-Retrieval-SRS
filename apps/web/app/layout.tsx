@@ -5,7 +5,9 @@ export const metadata: Metadata = {
   title: 'Audio Retrieval SRS',
   description: 'Audio-first spaced repetition system for language learning',
   icons: {
-    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎧</text></svg>',
+    icon: '/favicon.ico.svg',
+    shortcut: '/favicon.ico.svg',
+    apple: '/favicon.ico.svg',
   },
 };
 
