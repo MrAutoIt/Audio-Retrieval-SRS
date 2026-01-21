@@ -272,10 +272,23 @@ export default function LibraryPage() {
   }
 
   function toggleSelectAll() {
-    if (selectedIds.size === filteredSentences.length) {
-      setSelectedIds(new Set());
+    // Check if all filtered sentences are already selected
+    const allFilteredSelected = filteredSentences.every(s => selectedIds.has(s.id));
+    
+    if (allFilteredSelected) {
+      // Deselect all filtered sentences
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        filteredSentences.forEach(s => newSet.delete(s.id));
+        return newSet;
+      });
     } else {
-      setSelectedIds(new Set(filteredSentences.map(s => s.id)));
+      // Select all filtered sentences
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        filteredSentences.forEach(s => newSet.add(s.id));
+        return newSet;
+      });
     }
   }
 
@@ -283,7 +296,9 @@ export default function LibraryPage() {
     const storage = getStorage() as IndexedDBStorage;
     
     // Filter out already exported items unless re-exporting
-    let sentencesToExport = filteredSentences.filter(s => sentenceIds.includes(s.id));
+    // Use 'sentences' instead of 'filteredSentences' to ensure all selected items are exported
+    // regardless of current filter settings
+    let sentencesToExport = sentences.filter(s => sentenceIds.includes(s.id));
     if (!reExport) {
       sentencesToExport = sentencesToExport.filter(s => {
         const metadata = exportMetadataMap.get(s.id);
@@ -651,14 +666,14 @@ export default function LibraryPage() {
 
         <div className="mb-4 flex items-center justify-between">
           <p className="text-gray-600">
-            Showing {filteredSentences.length} of {sentences.length} sentences
+            Showing {filteredSentences.length} of {filteredSentences.length} sentences
           </p>
           <div className="flex gap-2">
             <button
               onClick={toggleSelectAll}
               className="px-3 py-1 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
             >
-              {selectedIds.size === filteredSentences.length ? 'Deselect All' : 'Select All'}
+              {filteredSentences.every(s => selectedIds.has(s.id)) && filteredSentences.length > 0 ? 'Deselect All' : 'Select All'}
             </button>
             {hasSelection && (
               <>

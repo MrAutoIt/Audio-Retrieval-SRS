@@ -52,6 +52,8 @@ export default function InboxPage() {
   const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [pendingAudios, setPendingAudios] = useState<PendingAudioMetadata[]>([]);
   const [whisperError, setWhisperError] = useState<string | null>(null);
+  const [hideDuplicates, setHideDuplicates] = useState(false);
+  const [processedFilter, setProcessedFilter] = useState<'all' | 'unprocessed' | 'processed'>('all');
 
   useEffect(() => {
     loadSettingsAndSentences();
@@ -722,6 +724,60 @@ export default function InboxPage() {
     });
   }
 
+  async function handleMarkAsProcessed(audioId: string) {
+    try {
+      const storage = getStorage();
+      await storage.updatePendingAudioMetadata(audioId, {
+        processedAt: new Date(),
+      });
+      
+      await loadPendingAudios();
+    } catch (error) {
+      console.error('Error marking audio as processed:', error);
+      setNotification({
+        message: 'Failed to mark audio as processed',
+        type: 'error',
+      });
+    }
+  }
+
+  async function handleMarkAsUnprocessed(audioId: string) {
+    try {
+      const storage = getStorage();
+      console.log('Marking audio as unprocessed:', audioId);
+      
+      // Get the current state first
+      const beforeUpdate = await storage.getAllPendingAudios();
+      const audioBefore = beforeUpdate.find(a => a.id === audioId);
+      console.log('Before update - processedAt:', audioBefore?.processedAt);
+      
+      // Use null as a sentinel value to explicitly remove processedAt
+      const updatePayload = { processedAt: null as any };
+      console.log('Calling updatePendingAudioMetadata with:', updatePayload);
+      
+      await storage.updatePendingAudioMetadata(audioId, updatePayload);
+      
+      console.log('Update call completed, reloading...');
+      await loadPendingAudios();
+      
+      // Verify the update worked
+      const updated = await storage.getAllPendingAudios();
+      const audio = updated.find(a => a.id === audioId);
+      console.log('After update - processedAt:', audio?.processedAt, 'isProcessed:', !!audio?.processedAt);
+      
+      // Also check the raw record if possible
+      if (audio) {
+        console.log('Full audio object:', JSON.stringify(audio, null, 2));
+      }
+    } catch (error) {
+      console.error('Error marking audio as unprocessed:', error);
+      setNotification({
+        message: 'Failed to mark audio as unprocessed',
+        type: 'error',
+      });
+    }
+  }
+
   function handleCloseWhisperMode() {
     setWhisperMode(false);
     setPendingAudioId(null);
@@ -799,38 +855,102 @@ export default function InboxPage() {
         {/* Pending Audio Files Section */}
         {pendingAudios.length > 0 && !whisperMode && (
           <div className="bg-blue-50 border border-blue-200 rounded p-4 mb-6">
-            <h2 className="text-xl font-bold mb-3">Pending Audio Files</h2>
-            <div className="space-y-2">
-              {pendingAudios.map((pending) => (
-                <div
-                  key={pending.id}
-                  className="bg-white border rounded p-3 flex justify-between items-center"
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-xl font-bold">Pending Audio Files</h2>
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-semibold">Filter:</label>
+                <select
+                  value={processedFilter}
+                  onChange={(e) => setProcessedFilter(e.target.value as 'all' | 'unprocessed' | 'processed')}
+                  className="px-3 py-1 border rounded bg-white text-sm"
                 >
-                  <div>
-                    <div className="font-semibold">{pending.filename}</div>
-                    <div className="text-sm text-gray-500">
-                      Uploaded: {new Date(pending.uploadedAt).toLocaleString()}
-                      {pending.segments && (
-                        <> | {pending.segments.length} segments</>
-                      )}
+                  <option value="all">All Files</option>
+                  <option value="unprocessed">Unprocessed Only</option>
+                  <option value="processed">Processed Only</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {(() => {
+                const filteredAudios = pendingAudios.filter((pending) => {
+                  const isProcessed = !!pending.processedAt;
+                  if (processedFilter === 'all') return true;
+                  if (processedFilter === 'unprocessed') return !isProcessed;
+                  if (processedFilter === 'processed') return isProcessed;
+                  return true;
+                });
+
+                if (filteredAudios.length === 0) {
+                  return (
+                    <div className="text-gray-500 text-center py-4">
+                      No audio files match the selected filter.
                     </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleLoadPendingAudio(pending)}
-                      className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                  );
+                }
+
+                return filteredAudios.map((pending) => {
+                  const isProcessed = !!pending.processedAt;
+                  return (
+                    <div
+                      key={pending.id}
+                      className={`bg-white border rounded p-3 flex justify-between items-center ${
+                        isProcessed ? 'opacity-75' : ''
+                      }`}
                     >
-                      Continue Processing
-                    </button>
-                    <button
-                      onClick={() => handleDeletePendingAudio(pending.id)}
-                      className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-semibold">{pending.filename}</div>
+                          {isProcessed && (
+                            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                              Processed
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Uploaded: {new Date(pending.uploadedAt).toLocaleString()}
+                          {pending.processedAt && (
+                            <> | Processed: {new Date(pending.processedAt).toLocaleString()}</>
+                          )}
+                          {pending.segments && (
+                            <> | {pending.segments.length} segments</>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleLoadPendingAudio(pending)}
+                          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                        >
+                          Continue Processing
+                        </button>
+                        {isProcessed ? (
+                          <button
+                            onClick={() => handleMarkAsUnprocessed(pending.id)}
+                            className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600"
+                            title="Mark as unprocessed"
+                          >
+                            Mark Unprocessed
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleMarkAsProcessed(pending.id)}
+                            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                            title="Mark as processed"
+                          >
+                            Mark Processed
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeletePendingAudio(pending.id)}
+                          className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
         )}
@@ -941,55 +1061,94 @@ export default function InboxPage() {
 
             {whisperSegments.length > 0 && (
               <>
-                {/* Header with selection count and save button */}
-                <div className="mb-6 flex justify-between items-center sticky top-0 bg-white z-10 pb-4 border-b">
-                  <div>
-                    <h2 className="text-2xl font-bold mb-1">Review Segments</h2>
-                    <span className="text-gray-600">
-                      {selectedSegmentIds.size} of {whisperSegments.length} segments selected
-                    </span>
-                  </div>
-                  <button
-                    onClick={handleSaveSelectedSegments}
-                    disabled={selectedSegmentIds.size === 0}
-                    className="bg-green-500 text-white px-6 py-3 rounded-lg hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition-colors"
-                  >
-                    Save Selected Sentences
-                  </button>
-                </div>
+                {/* Filter and filter segments */}
+                {(() => {
+                  const filteredSegments = hideDuplicates
+                    ? whisperSegments.filter(segment => {
+                        const duplicates = duplicateMatches.get(segment.id) || [];
+                        return duplicates.length === 0;
+                      })
+                    : whisperSegments;
+                  
+                  const filteredSelectedCount = filteredSegments.filter(seg => 
+                    selectedSegmentIds.has(seg.id)
+                  ).length;
+                  
+                  const duplicateCount = whisperSegments.filter(segment => {
+                    const duplicates = duplicateMatches.get(segment.id) || [];
+                    return duplicates.length > 0;
+                  }).length;
 
-                {/* Clean sentence list */}
-                <div className="mb-32">
-                  <WhisperSegmentList
-                    segments={whisperSegments}
-                    selectedSegmentIds={selectedSegmentIds}
-                    duplicateMatches={duplicateMatches}
-                    activeSegmentId={audioPlayerState.activeSegmentId}
-                    fullAudioBlob={fullAudioBlob}
-                    isPlaying={audioPlayerState.isPlaying}
-                    onToggleSelect={(id) => {
-                      const newSet = new Set(selectedSegmentIds);
-                      if (newSet.has(id)) {
-                        newSet.delete(id);
-                      } else {
-                        newSet.add(id);
-                      }
-                      setSelectedSegmentIds(newSet);
-                    }}
-                    onUpdateSegment={handleUpdateSegment}
-                    onUpdateMultipleSegments={handleUpdateMultipleSegments}
-                    onPlaySegment={handlePlaySegment}
-                    onSeekToSegment={handleSeekToSegment}
-                    onEditExisting={(sentenceId) => {
-                      // Navigate to edit or open edit dialog
-                      const sentence = sentences.find(s => s.id === sentenceId);
-                      if (sentence) {
-                        handleEdit(sentence);
-                        setWhisperMode(false);
-                      }
-                    }}
-                  />
-                </div>
+                  return (
+                    <>
+                      {/* Header with selection count, filter, and save button */}
+                      <div className="mb-6 flex justify-between items-center sticky top-0 bg-white z-10 pb-4 border-b">
+                        <div>
+                          <h2 className="text-2xl font-bold mb-1">Review Segments</h2>
+                          <div className="flex items-center gap-4 flex-wrap">
+                            <span className="text-gray-600">
+                              {filteredSelectedCount} of {filteredSegments.length} segment{filteredSegments.length !== 1 ? 's' : ''} selected
+                              {hideDuplicates && duplicateCount > 0 && (
+                                <span className="text-gray-400 ml-1">
+                                  (of {whisperSegments.length} total, {duplicateCount} duplicate{duplicateCount !== 1 ? 's' : ''} hidden)
+                                </span>
+                              )}
+                            </span>
+                            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={hideDuplicates}
+                                onChange={(e) => setHideDuplicates(e.target.checked)}
+                                className="w-4 h-4 cursor-pointer"
+                              />
+                              <span>Hide potential duplicates</span>
+                            </label>
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleSaveSelectedSegments}
+                          disabled={selectedSegmentIds.size === 0}
+                          className="bg-green-500 text-white px-6 py-3 rounded-lg hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition-colors"
+                        >
+                          Save Selected Sentences
+                        </button>
+                      </div>
+
+                      {/* Clean sentence list */}
+                      <div className="mb-32">
+                        <WhisperSegmentList
+                          segments={filteredSegments}
+                          selectedSegmentIds={selectedSegmentIds}
+                          duplicateMatches={duplicateMatches}
+                          activeSegmentId={audioPlayerState.activeSegmentId}
+                          fullAudioBlob={fullAudioBlob}
+                          isPlaying={audioPlayerState.isPlaying}
+                          onToggleSelect={(id) => {
+                            const newSet = new Set(selectedSegmentIds);
+                            if (newSet.has(id)) {
+                              newSet.delete(id);
+                            } else {
+                              newSet.add(id);
+                            }
+                            setSelectedSegmentIds(newSet);
+                          }}
+                          onUpdateSegment={handleUpdateSegment}
+                          onUpdateMultipleSegments={handleUpdateMultipleSegments}
+                          onPlaySegment={handlePlaySegment}
+                          onSeekToSegment={handleSeekToSegment}
+                          onEditExisting={(sentenceId) => {
+                            // Navigate to edit or open edit dialog
+                            const sentence = sentences.find(s => s.id === sentenceId);
+                            if (sentence) {
+                              handleEdit(sentence);
+                              setWhisperMode(false);
+                            }
+                          }}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {/* Fixed audio player at bottom */}
                 {fullAudioBlob && (

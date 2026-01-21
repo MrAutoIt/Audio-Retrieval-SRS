@@ -273,24 +273,72 @@ export class IndexedDBStorage implements StorageAdapter {
   }
 
   async updatePendingAudioMetadata(audioId: string, metadata: Partial<PendingAudioMetadata>): Promise<void> {
-    const record = await this.db.pendingAudio.get(audioId);
-    if (!record) {
-      throw new Error(`Pending audio ${audioId} not found`);
+    try {
+      console.log('[Storage] === updatePendingAudioMetadata START ===', audioId);
+      const record = await this.db.pendingAudio.get(audioId);
+      if (!record) {
+        throw new Error(`Pending audio ${audioId} not found`);
+      }
+      const existing = JSON.parse(record.metadata);
+      
+      console.log('[Storage] updatePendingAudioMetadata called:', {
+        audioId,
+        metadataKeys: Object.keys(metadata),
+        metadataHasOwnProperty: Object.prototype.hasOwnProperty.call(metadata, 'processedAt'),
+        hasProcessedAt: 'processedAt' in metadata,
+        processedAtValue: metadata.processedAt,
+        processedAtType: typeof metadata.processedAt,
+        existingProcessedAt: existing.processedAt
+      });
+    
+    // Determine the new processedAt value
+    // Use hasOwnProperty to check if processedAt was explicitly provided (even if undefined)
+    let processedAtValue: Date | undefined | null;
+    if (Object.prototype.hasOwnProperty.call(metadata, 'processedAt')) {
+      // If processedAt is explicitly provided in metadata (even if undefined or null), use it
+      // null means explicitly remove it
+      processedAtValue = metadata.processedAt === null ? undefined : metadata.processedAt;
+      console.log('[Storage] processedAt explicitly provided:', metadata.processedAt, '-> resolved to:', processedAtValue);
+    } else {
+      // Otherwise, preserve existing value
+      processedAtValue = existing.processedAt ? new Date(existing.processedAt) : undefined;
+      console.log('[Storage] preserving existing processedAt:', processedAtValue);
     }
-    const existing = JSON.parse(record.metadata);
-    const updated: PendingAudioMetadata = {
-      ...existing,
-      ...metadata,
-      uploadedAt: existing.uploadedAt ? new Date(existing.uploadedAt) : new Date(),
-      processedAt: metadata.processedAt ? metadata.processedAt : (existing.processedAt ? new Date(existing.processedAt) : undefined),
+    
+    // Build the serialized metadata object
+    const serializedMetadata: any = {
+      id: existing.id || metadata.id,
+      filename: metadata.filename ?? existing.filename,
+      languageCode: metadata.languageCode ?? existing.languageCode,
+      detectedLanguage: metadata.detectedLanguage ?? existing.detectedLanguage,
+      uploadedAt: existing.uploadedAt ? new Date(existing.uploadedAt).toISOString() : new Date().toISOString(),
+      segments: metadata.segments ?? existing.segments,
+      tags: metadata.tags ?? existing.tags,
     };
+    
+    // Only include processedAt in JSON if it's defined
+    if (processedAtValue) {
+      serializedMetadata.processedAt = processedAtValue.toISOString();
+      console.log('[Storage] Including processedAt in serialized metadata:', serializedMetadata.processedAt);
+    } else {
+      console.log('[Storage] processedAt is undefined, NOT including in serialized metadata');
+    }
+    
+    console.log('[Storage] Final serialized metadata keys:', Object.keys(serializedMetadata));
+    
     await this.db.pendingAudio.update(audioId, {
-      metadata: JSON.stringify({
-        ...updated,
-        uploadedAt: updated.uploadedAt.toISOString(),
-        processedAt: updated.processedAt?.toISOString(),
-      }),
+      metadata: JSON.stringify(serializedMetadata),
     });
+    
+    // Verify what was stored
+    const verifyRecord = await this.db.pendingAudio.get(audioId);
+    const verifyMeta = JSON.parse(verifyRecord!.metadata);
+    console.log('[Storage] After update, stored metadata has processedAt:', verifyMeta.processedAt);
+    console.log('[Storage] === updatePendingAudioMetadata END ===');
+    } catch (error) {
+      console.error('[Storage] ERROR in updatePendingAudioMetadata:', error);
+      throw error;
+    }
   }
 
   // Import/Export
