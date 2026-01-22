@@ -414,3 +414,90 @@ export async function createExportZip(packageData: ExportPackage): Promise<Blob>
     throw error;
   }
 }
+
+/**
+ * Create a ZIP file containing only audio files for selected sentences
+ * This does not call any APIs - it uses existing audio from storage
+ */
+export async function createAudioOnlyZip(
+  sentences: Array<{ id: string; english_translation_text: string }>,
+  storage: StorageAdapter
+): Promise<Blob> {
+  console.log('[Export] createAudioOnlyZip: Starting, sentences count:', sentences.length);
+  
+  if (sentences.length === 0) {
+    throw new Error('Cannot create ZIP with no sentences');
+  }
+  
+  try {
+    // Dynamic import of JSZip to avoid bundling issues
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+
+    // Process each sentence
+    let filesAddedCount = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      const sentence = sentences[i];
+      console.log(`[Export] Processing sentence ${i + 1}/${sentences.length}: ${sentence.id}`);
+      
+      // Get audio from storage
+      const audio = await storage.getAudio(sentence.id);
+      if (!audio) {
+        console.warn(`[Export] No audio found for sentence ${sentence.id}, skipping`);
+        continue;
+      }
+
+      // Detect audio format
+      const audioExt = await detectAudioFormat(audio);
+      console.log(`[Export] Audio format detected: ${audioExt} for sentence ${sentence.id}`);
+
+      // Create a safe filename from the English text (sanitize for filesystem)
+      const safeFilename = sentence.english_translation_text
+        .replace(/[^a-zA-Z0-9\s]/g, '') // Remove special characters
+        .replace(/\s+/g, '_') // Replace spaces with underscores
+        .substring(0, 50) // Limit length
+        || `sentence_${sentence.id.substring(0, 8)}`; // Fallback to sentence ID
+
+      const fileName = `${safeFilename}.${audioExt}`;
+      
+      // Convert blob to ArrayBuffer
+      const audioBuffer = await audio.arrayBuffer();
+      
+      // Add file to ZIP
+      zip.file(fileName, audioBuffer, { binary: true });
+      filesAddedCount++;
+      
+      console.log(`[Export] Added audio file: ${fileName} (${audioBuffer.byteLength} bytes)`);
+    }
+
+    if (filesAddedCount === 0) {
+      throw new Error('No audio files found to export');
+    }
+
+    console.log(`[Export] Total audio files added to ZIP: ${filesAddedCount}`);
+
+    // Generate ZIP
+    console.log('[Export] Generating audio-only ZIP blob...');
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: {
+        level: 6,
+      },
+      streamFiles: false,
+    });
+    
+    console.log('[Export] Audio-only ZIP blob generated:', blob.size, 'bytes, type:', blob.type);
+    
+    // Validate the blob
+    if (!blob || blob.size === 0) {
+      throw new Error('Generated audio-only ZIP blob is empty');
+    }
+    
+    return blob;
+  } catch (error) {
+    console.error('[Export] Error creating audio-only ZIP:', error);
+    console.error('[Export] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    throw error;
+  }
+}

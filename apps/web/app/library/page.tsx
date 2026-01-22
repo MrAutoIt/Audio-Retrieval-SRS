@@ -4,16 +4,17 @@ import { useEffect, useState } from 'react';
 import { getStorage } from '@/lib/storage';
 import { Sentence, Settings, DEFAULT_SETTINGS } from '@audio-retrieval-srs/core';
 import { IndexedDBStorage } from '@audio-retrieval-srs/storage';
-import { generateCardForSentence, createExportZip } from '@/lib/audio-flashcards-export';
+import { generateCardForSentence, createExportZip, createAudioOnlyZip } from '@/lib/audio-flashcards-export';
 import { v4 as uuidv4 } from 'uuid';
 import ExportProgressModal, { ExportItemStatus } from '@/components/ExportProgressModal';
 import { Notification } from '@/components/Notification';
 import Link from 'next/link';
 
 interface ExportMetadata {
-  exportedAt: Date;
-  exportPackageId: string;
-  cardId: string;
+  exportedAt?: Date;
+  exportPackageId?: string;
+  cardId?: string;
+  audioExportedAt?: Date;
 }
 
 export default function LibraryPage() {
@@ -25,6 +26,7 @@ export default function LibraryPage() {
   const [boxFilter, setBoxFilter] = useState<number | null>(null);
   const [dueFilter, setDueFilter] = useState<'all' | 'due' | 'not-due'>('all');
   const [exportStatusFilter, setExportStatusFilter] = useState<'all' | 'exported' | 'not-exported'>('all');
+  const [exportTypeFilter, setExportTypeFilter] = useState<'all' | 'flashcard' | 'audio-only' | 'both'>('all');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   
@@ -34,6 +36,7 @@ export default function LibraryPage() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportItems, setExportItems] = useState<ExportItemStatus[]>([]);
   const [exportPackageBlob, setExportPackageBlob] = useState<Blob | null>(null);
+  const [exportType, setExportType] = useState<'flashcard' | 'audio-only'>('flashcard');
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'warning' | 'info' | 'success' } | null>(null);
 
   useEffect(() => {
@@ -42,7 +45,7 @@ export default function LibraryPage() {
 
   useEffect(() => {
     filterSentences();
-  }, [sentences, searchQuery, tagFilter, boxFilter, dueFilter, exportStatusFilter, exportMetadataMap]);
+  }, [sentences, searchQuery, tagFilter, boxFilter, dueFilter, exportStatusFilter, exportTypeFilter, exportMetadataMap]);
 
   async function loadSentences() {
     const startTime = performance.now();
@@ -134,11 +137,12 @@ export default function LibraryPage() {
         
         // Convert to ExportMetadata format
         batchResult.forEach((value, sentenceId) => {
-          console.log(`[Library] loadExportMetadata: Processing metadata for sentence ${sentenceId}, exportedAt: ${value.exportedAt}`);
+          console.log(`[Library] loadExportMetadata: Processing metadata for sentence ${sentenceId}, exportedAt: ${value.exportedAt}, audioExportedAt: ${value.audioExportedAt}`);
           metadataMap.set(sentenceId, {
             exportedAt: value.exportedAt,
             exportPackageId: value.exportPackageId,
             cardId: value.cardId,
+            audioExportedAt: value.audioExportedAt,
           });
         });
         
@@ -175,6 +179,7 @@ export default function LibraryPage() {
               exportedAt: result.metadata.exportedAt,
               exportPackageId: result.metadata.exportPackageId,
               cardId: result.metadata.cardId,
+              audioExportedAt: result.metadata.audioExportedAt,
             });
           }
         });
@@ -237,6 +242,24 @@ export default function LibraryPage() {
       filtered = filtered.filter(s => !exportMetadataMap.has(s.id));
     }
 
+    // Export type filter
+    if (exportTypeFilter === 'flashcard') {
+      filtered = filtered.filter(s => {
+        const metadata = exportMetadataMap.get(s.id);
+        return metadata?.exportedAt !== undefined;
+      });
+    } else if (exportTypeFilter === 'audio-only') {
+      filtered = filtered.filter(s => {
+        const metadata = exportMetadataMap.get(s.id);
+        return metadata?.audioExportedAt !== undefined;
+      });
+    } else if (exportTypeFilter === 'both') {
+      filtered = filtered.filter(s => {
+        const metadata = exportMetadataMap.get(s.id);
+        return metadata?.exportedAt !== undefined && metadata?.audioExportedAt !== undefined;
+      });
+    }
+
     setFilteredSentences(filtered);
   }
 
@@ -251,12 +274,25 @@ export default function LibraryPage() {
     return 'Not Due';
   }
 
-  function getExportStatus(sentenceId: string): { status: 'exported' | 'not-exported'; date?: Date } {
+  function getExportStatus(sentenceId: string): { 
+    flashcardExported: boolean; 
+    audioExported: boolean; 
+    flashcardDate?: Date; 
+    audioDate?: Date;
+  } {
     const metadata = exportMetadataMap.get(sentenceId);
     if (metadata) {
-      return { status: 'exported', date: metadata.exportedAt };
+      return {
+        flashcardExported: metadata.exportedAt !== undefined,
+        audioExported: metadata.audioExportedAt !== undefined,
+        flashcardDate: metadata.exportedAt,
+        audioDate: metadata.audioExportedAt,
+      };
     }
-    return { status: 'not-exported' };
+    return {
+      flashcardExported: false,
+      audioExported: false,
+    };
   }
 
   function toggleSelect(sentenceId: string) {
@@ -324,6 +360,7 @@ export default function LibraryPage() {
     setExportItems(items);
     setShowExportModal(true);
     setExportPackageBlob(null);
+    setExportType('flashcard');
 
     // Generate deck ID once
     const deckId = `${uuidv4()}-*`;
@@ -381,10 +418,12 @@ export default function LibraryPage() {
         // Update local metadata map
         setExportMetadataMap(prev => {
           const updated = new Map(prev);
+          const existing = prev.get(sentence.id);
           updated.set(sentence.id, {
             exportedAt: new Date(),
             exportPackageId: deckId,
             cardId: card.cardId,
+            audioExportedAt: existing?.audioExportedAt, // Preserve audio export timestamp
           });
           return updated;
         });
@@ -455,6 +494,128 @@ export default function LibraryPage() {
     }
   }
 
+  async function handleAudioOnlyExport(sentenceIds: string[]) {
+    const storage = getStorage() as IndexedDBStorage;
+    
+    // Get sentences to export
+    const sentencesToExport = sentences.filter(s => sentenceIds.includes(s.id));
+
+    if (sentencesToExport.length === 0) {
+      setNotification({
+        message: 'No sentences selected for audio export.',
+        type: 'info',
+      });
+      return;
+    }
+
+    // Initialize export status
+    const items: ExportItemStatus[] = sentencesToExport.map(s => ({
+      sentenceId: s.id,
+      sentenceText: s.english_translation_text,
+      status: 'pending',
+    }));
+    
+    setExportItems(items);
+    setShowExportModal(true);
+    setExportPackageBlob(null);
+    setExportType('audio-only');
+
+    const successfulSentences: Array<{ id: string; english_translation_text: string }> = [];
+
+    // Process each sentence individually
+    for (let i = 0; i < sentencesToExport.length; i++) {
+      const sentence = sentencesToExport[i];
+      
+      // Update status to exporting
+      setExportItems(prev => {
+        const updated = [...prev];
+        updated[i] = { ...updated[i], status: 'exporting' };
+        return updated;
+      });
+
+      try {
+        // Check if audio exists
+        const audio = await storage.getAudio(sentence.id);
+        if (!audio) {
+          throw new Error(`No audio found for sentence ${sentence.id}`);
+        }
+
+        // Save audio export metadata
+        if (storage instanceof IndexedDBStorage) {
+          try {
+            await storage.saveAudioExportMetadata(sentence.id);
+            console.log(`[Library] Saved audio export metadata for sentence ${sentence.id}`);
+          } catch (saveError) {
+            console.error(`[Library] Failed to save audio export metadata for sentence ${sentence.id}:`, saveError);
+          }
+        }
+
+        // Update local metadata map
+        setExportMetadataMap(prev => {
+          const updated = new Map(prev);
+          const existing = prev.get(sentence.id);
+          updated.set(sentence.id, {
+            exportedAt: existing?.exportedAt, // Preserve flashcard export timestamp
+            exportPackageId: existing?.exportPackageId,
+            cardId: existing?.cardId,
+            audioExportedAt: new Date(),
+          });
+          return updated;
+        });
+
+        successfulSentences.push({
+          id: sentence.id,
+          english_translation_text: sentence.english_translation_text,
+        });
+
+        // Update status to success
+        setExportItems(prev => {
+          const updated = [...prev];
+          updated[i] = { ...updated[i], status: 'success' };
+          return updated;
+        });
+      } catch (error: any) {
+        console.error(`Failed to export audio for sentence ${sentence.id}:`, error);
+        setExportItems(prev => {
+          const updated = [...prev];
+          updated[i] = {
+            ...updated[i],
+            status: 'failed',
+            error: error.message || 'Audio export failed',
+          };
+          return updated;
+        });
+      }
+    }
+
+    // Create ZIP file only with successfully exported sentences
+    if (successfulSentences.length > 0) {
+      try {
+        console.log('[Library] Creating audio-only ZIP with', successfulSentences.length, 'sentences...');
+        const zipBlob = await createAudioOnlyZip(successfulSentences, storage);
+        
+        if (!zipBlob || zipBlob.size === 0) {
+          throw new Error('Generated audio-only ZIP blob is empty');
+        }
+        
+        console.log('[Library] Audio-only ZIP created successfully:', zipBlob.size, 'bytes');
+        setExportPackageBlob(zipBlob);
+      } catch (error: any) {
+        console.error('[Library] Failed to create audio-only ZIP:', error);
+        setNotification({
+          message: `Failed to create audio-only export package: ${error.message}`,
+          type: 'error',
+        });
+        setExportPackageBlob(null);
+      }
+    } else {
+      setNotification({
+        message: 'Audio export failed for all items. Please check the errors above and try again.',
+        type: 'error',
+      });
+    }
+  }
+
   async function handleDownloadPackage(blob: Blob) {
     console.log('[Library] handleDownloadPackage: Blob size:', blob.size, 'bytes, type:', blob.type);
     
@@ -496,7 +657,9 @@ export default function LibraryPage() {
       const minutes = String(now.getMinutes()).padStart(2, '0');
       const seconds = String(now.getSeconds()).padStart(2, '0');
       const dateTimeStr = `${year}-${month}-${day}_${hours}-${minutes}-${seconds}`;
-      const fileName = `audio-flashcards-export-${dateTimeStr}.zip`;
+      const fileName = exportType === 'audio-only' 
+        ? `audio-only-export-${dateTimeStr}.zip`
+        : `audio-flashcards-export-${dateTimeStr}.zip`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -600,7 +763,7 @@ export default function LibraryPage() {
         </div>
 
         <div className="bg-gray-100 p-4 rounded mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
             <div>
               <label className="block mb-2 font-semibold">Search</label>
               <input
@@ -661,6 +824,19 @@ export default function LibraryPage() {
                 <option value="not-exported">Not Exported</option>
               </select>
             </div>
+            <div>
+              <label className="block mb-2 font-semibold">Export Type</label>
+              <select
+                value={exportTypeFilter}
+                onChange={(e) => setExportTypeFilter(e.target.value as typeof exportTypeFilter)}
+                className="w-full p-2 border rounded"
+              >
+                <option value="all">All Types</option>
+                <option value="flashcard">Flashcard Export</option>
+                <option value="audio-only">Audio Only</option>
+                <option value="both">Both Types</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -681,13 +857,19 @@ export default function LibraryPage() {
                   onClick={() => handleExport(Array.from(selectedIds), false)}
                   className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
                 >
-                  Export Selected ({selectedIds.size})
+                  Export Flashcard ({selectedIds.size})
+                </button>
+                <button
+                  onClick={() => handleAudioOnlyExport(Array.from(selectedIds))}
+                  className="px-3 py-1 text-sm bg-green-500 text-white rounded hover:bg-green-600"
+                >
+                  Export Audio Only ({selectedIds.size})
                 </button>
                 <button
                   onClick={() => handleExport(Array.from(selectedIds), true)}
                   className="px-3 py-1 text-sm bg-purple-500 text-white rounded hover:bg-purple-600"
                 >
-                  Re-export Selected
+                  Re-export Flashcard
                 </button>
               </>
             )}
@@ -701,6 +883,7 @@ export default function LibraryPage() {
             {filteredSentences.map((sentence) => {
               const exportStatus = getExportStatus(sentence.id);
               const isSelected = selectedIds.has(sentence.id);
+              const hasAnyExport = exportStatus.flashcardExported || exportStatus.audioExported;
 
               return (
                 <div
@@ -729,12 +912,17 @@ export default function LibraryPage() {
                           {sentence.tags && sentence.tags.length > 0 && (
                             <span>Tags: {sentence.tags.join(', ')}</span>
                           )}
-                          {exportStatus.status === 'exported' && exportStatus.date && (
+                          {exportStatus.flashcardExported && exportStatus.flashcardDate && (
                             <span className="text-green-600">
-                              Exported {exportStatus.date.toLocaleDateString()} {exportStatus.date.toLocaleTimeString()}
+                              Flashcard: {exportStatus.flashcardDate.toLocaleDateString()} {exportStatus.flashcardDate.toLocaleTimeString()}
                             </span>
                           )}
-                          {exportStatus.status === 'not-exported' && (
+                          {exportStatus.audioExported && exportStatus.audioDate && (
+                            <span className="text-blue-600">
+                              Audio: {exportStatus.audioDate.toLocaleDateString()} {exportStatus.audioDate.toLocaleTimeString()}
+                            </span>
+                          )}
+                          {!hasAnyExport && (
                             <span className="text-gray-400">Not exported</span>
                           )}
                         </div>
@@ -765,12 +953,23 @@ export default function LibraryPage() {
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              handleExport([sentence.id], exportStatus.status === 'exported');
+                              handleExport([sentence.id], exportStatus.flashcardExported);
                             }}
                             className="opacity-0 group-hover:opacity-100 px-2 py-1 text-sm text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded transition-opacity"
-                            title={exportStatus.status === 'exported' ? 'Re-export' : 'Export'}
+                            title={exportStatus.flashcardExported ? 'Re-export Flashcard' : 'Export Flashcard'}
                           >
-                            {exportStatus.status === 'exported' ? '↻' : '📤'}
+                            {exportStatus.flashcardExported ? '↻' : '📤'}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleAudioOnlyExport([sentence.id]);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 px-2 py-1 text-sm text-green-500 hover:text-green-700 hover:bg-green-50 rounded transition-opacity"
+                            title="Export Audio Only"
+                          >
+                            🎵
                           </button>
                           <Link
                             href={`/library/${sentence.id}`}
@@ -808,6 +1007,7 @@ export default function LibraryPage() {
           setShowExportModal(false);
           setExportItems([]);
           setExportPackageBlob(null);
+          setExportType('flashcard');
         }}
         onDownload={handleDownloadPackage}
         exportPackageBlob={exportPackageBlob}

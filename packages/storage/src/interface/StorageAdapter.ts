@@ -80,10 +80,11 @@ export interface StorageAdapter {
   }): Promise<void>;
   
   // Export Metadata
-  getExportMetadata(sentenceId: string): Promise<{ exportedAt: Date; exportPackageId: string; cardId: string } | null>;
+  getExportMetadata(sentenceId: string): Promise<{ exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date } | null>;
   saveExportMetadata(sentenceId: string, exportPackageId: string, cardId: string): Promise<void>;
+  saveAudioExportMetadata(sentenceId: string): Promise<void>;
   deleteExportMetadata(sentenceId: string): Promise<void>;
-  getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt: Date; exportPackageId: string; cardId: string }>>;
+  getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date }>>;
   
   // Utility
   clearAll(): Promise<void>;

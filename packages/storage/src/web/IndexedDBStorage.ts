@@ -36,9 +36,10 @@ interface PendingAudioRecord {
 
 interface ExportMetadataRecord {
   sentenceId: string;
-  exportedAt: string; // ISO string
+  exportedAt: string; // ISO string - flashcard export timestamp
   exportPackageId: string;
   cardId: string;
+  audioExportedAt?: string; // ISO string - audio-only export timestamp (optional)
 }
 
 class AudioRetrievalDB extends Dexie {
@@ -411,18 +412,19 @@ export class IndexedDBStorage implements StorageAdapter {
   }
 
   // Export Metadata
-  async getExportMetadata(sentenceId: string): Promise<{ exportedAt: Date; exportPackageId: string; cardId: string } | null> {
+  async getExportMetadata(sentenceId: string): Promise<{ exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date } | null> {
     const record = await this.db.exportMetadata.get(sentenceId);
     if (!record) return null;
     return {
-      exportedAt: new Date(record.exportedAt),
-      exportPackageId: record.exportPackageId,
-      cardId: record.cardId,
+      exportedAt: record.exportedAt ? new Date(record.exportedAt) : undefined,
+      exportPackageId: record.exportPackageId || undefined,
+      cardId: record.cardId || undefined,
+      audioExportedAt: record.audioExportedAt ? new Date(record.audioExportedAt) : undefined,
     };
   }
 
-  async getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt: Date; exportPackageId: string; cardId: string }>> {
-    const metadataMap = new Map<string, { exportedAt: Date; exportPackageId: string; cardId: string }>();
+  async getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date }>> {
+    const metadataMap = new Map<string, { exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date }>();
     
     if (sentenceIds.length === 0) {
       console.log('[IndexedDB] getAllExportMetadata: No sentence IDs provided');
@@ -443,16 +445,17 @@ export class IndexedDBStorage implements StorageAdapter {
       console.warn('[IndexedDB] getAllExportMetadata: No matching records found, but table has records. Checking if sentenceIds match...');
       // Debug: show all records in the table
       const allRecords = await this.db.exportMetadata.toArray();
-      console.log('[IndexedDB] getAllExportMetadata: All records in table:', allRecords.map(r => ({ sentenceId: r.sentenceId, exportedAt: r.exportedAt })));
+      console.log('[IndexedDB] getAllExportMetadata: All records in table:', allRecords.map(r => ({ sentenceId: r.sentenceId, exportedAt: r.exportedAt, audioExportedAt: r.audioExportedAt })));
       console.log('[IndexedDB] getAllExportMetadata: Looking for sentenceIds:', sentenceIds);
     }
     
     for (const record of records) {
       console.log(`[IndexedDB] getAllExportMetadata: Processing record for sentenceId: ${record.sentenceId}`);
       metadataMap.set(record.sentenceId, {
-        exportedAt: new Date(record.exportedAt),
-        exportPackageId: record.exportPackageId,
-        cardId: record.cardId,
+        exportedAt: record.exportedAt ? new Date(record.exportedAt) : undefined,
+        exportPackageId: record.exportPackageId || undefined,
+        cardId: record.cardId || undefined,
+        audioExportedAt: record.audioExportedAt ? new Date(record.audioExportedAt) : undefined,
       });
     }
     
@@ -461,11 +464,14 @@ export class IndexedDBStorage implements StorageAdapter {
   }
 
   async saveExportMetadata(sentenceId: string, exportPackageId: string, cardId: string): Promise<void> {
+    // Get existing record if it exists to preserve audioExportedAt
+    const existing = await this.db.exportMetadata.get(sentenceId);
     const record: ExportMetadataRecord = {
       sentenceId,
       exportedAt: new Date().toISOString(),
       exportPackageId,
       cardId,
+      audioExportedAt: existing?.audioExportedAt, // Preserve existing audio export timestamp
     };
     console.log('[IndexedDB] saveExportMetadata: Saving record:', record);
     await this.db.exportMetadata.put(record);
@@ -477,6 +483,29 @@ export class IndexedDBStorage implements StorageAdapter {
       console.log('[IndexedDB] saveExportMetadata: Verified saved record:', verify);
     } else {
       console.error('[IndexedDB] saveExportMetadata: WARNING - Record not found after save!');
+    }
+  }
+
+  async saveAudioExportMetadata(sentenceId: string): Promise<void> {
+    // Get existing record if it exists to preserve flashcard export data
+    const existing = await this.db.exportMetadata.get(sentenceId);
+    const record: ExportMetadataRecord = {
+      sentenceId,
+      exportedAt: existing?.exportedAt || '', // Preserve existing flashcard export timestamp
+      exportPackageId: existing?.exportPackageId || '',
+      cardId: existing?.cardId || '',
+      audioExportedAt: new Date().toISOString(),
+    };
+    console.log('[IndexedDB] saveAudioExportMetadata: Saving record:', record);
+    await this.db.exportMetadata.put(record);
+    console.log('[IndexedDB] saveAudioExportMetadata: Record saved successfully');
+    
+    // Verify it was saved
+    const verify = await this.db.exportMetadata.get(sentenceId);
+    if (verify) {
+      console.log('[IndexedDB] saveAudioExportMetadata: Verified saved record:', verify);
+    } else {
+      console.error('[IndexedDB] saveAudioExportMetadata: WARNING - Record not found after save!');
     }
   }
 

@@ -119,7 +119,7 @@ export class SQLiteStorage implements StorageAdapter {
   }
 
   // Export Metadata
-  async getExportMetadata(sentenceId: string): Promise<{ exportedAt: Date; exportPackageId: string; cardId: string } | null> {
+  async getExportMetadata(sentenceId: string): Promise<{ exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date } | null> {
     throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
   }
 
@@ -127,11 +127,15 @@ export class SQLiteStorage implements StorageAdapter {
     throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
   }
 
+  async saveAudioExportMetadata(sentenceId: string): Promise<void> {
+    throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
+  }
+
   async deleteExportMetadata(sentenceId: string): Promise<void> {
     throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
   }
 
-  async getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt: Date; exportPackageId: string; cardId: string }>> {
+  async getAllExportMetadata(sentenceIds: string[]): Promise<Map<string, { exportedAt?: Date; exportPackageId?: string; cardId?: string; audioExportedAt?: Date }>> {
     throw new Error('SQLiteStorage must be implemented in the mobile app with expo-sqlite');
   }
 
